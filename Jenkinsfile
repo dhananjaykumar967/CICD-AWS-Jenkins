@@ -1,32 +1,41 @@
 node {
     def appDir = '/var/www/nextjs-app'
 
-    stage('Clean Workspace'){
+    stage('Clean Workspace') {
         echo 'Cleaning Jenkins Workspace'
         deleteDir()
     }
 
-    stage('Clone Repo'){
+    stage('Clone Repo') {
         echo 'Cloning the repo'
-        git(
-            branch: 'main',
-            url: 'https://github.com/dhananjaykumar967/CICD-AWS-Jenkins'
-        )
+        git branch: 'main', url: 'https://github.com/dhananjaykumar967/CICD-AWS-Jenkins'
     }
 
-    stage('Deploy to EC2'){
+    stage('Deploy to EC2') {
         echo 'Deploying to EC2'
-        sh """
-            sudo mkdir -p ${appDir}
-            sudo chown -R jenkins:jenkins ${appDir}
+        // Stops Jenkins from killing the app process when the build ends
+        withEnv(['JENKINS_NODE_COOKIE=dontKillMe']) {
+            sh """
+                sudo mkdir -p ${appDir}
+                sudo chown -R jenkins:jenkins ${appDir}
+                rsync -av --delete --exclude='.git' --exclude='node_modules' ./ ${appDir}
+                cd ${appDir}
+                npm install
+                npm run build
 
-            rsync -av --delete --exclude='.git' --exclude='node_modules' ./ ${appDir}
+                # Install pm2 once if it isn't already there
+                if ! command -v pm2 >/dev/null 2>&1; then
+                    sudo npm install -g pm2
+                fi
 
-            cd ${appDir}
-            sudo npm install
-            sudo npm run build
-            sudo fuser -k 3000/tcp || true
-            npm run start
-        """
+                # Free the port in case a stale process is holding it
+                sudo fuser -k 3000/tcp || true
+
+                # Restart if already running, otherwise start fresh
+                pm2 delete nextjs-app || true
+                pm2 start npm --name nextjs-app -- run start
+                pm2 save
+            """
+        }
     }
 }
